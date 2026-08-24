@@ -338,6 +338,24 @@
     .identity input{width:100%;}
   }
 
+
+  .calendar-panel{margin-bottom:18px;}
+  .cal-nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+  .cal-month-label{font-family:var(--font-display);font-weight:700;font-size:1.05rem;text-transform:capitalize;}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+  .cal-weekdays{margin-bottom:4px;}
+  .cal-weekday{text-align:center;font-size:0.72rem;color:var(--ink-muted);font-weight:700;text-transform:uppercase;}
+  .cal-cell{
+    aspect-ratio:1;border:1px solid var(--border);border-radius:8px;background:var(--surface);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    font-size:0.82rem;color:var(--ink);cursor:pointer;padding:2px;font-family:inherit;
+  }
+  .cal-cell:hover{border-color:var(--accent);}
+  .cal-cell.empty{border:none;background:none;cursor:default;}
+  .cal-cell.today{border-color:var(--accent);font-weight:700;}
+  .cal-cell.selected{background:var(--accent-soft);border-color:var(--accent);}
+  .cal-dots{display:flex;gap:2px;}
+  .cal-dot{width:5px;height:5px;border-radius:50%;background:var(--accent);}
 </style>
 
 </head>
@@ -416,6 +434,8 @@
     recipeDraft: null,
     recipeEditingId: null,
     calFormOpen: false,
+    calMonth: null,
+    calSelectedDate: null,
     pendingDelete: null,
     name: localStorage.getItem(NAME_KEY) || ""
   };
@@ -462,6 +482,22 @@
   function fmtDate(iso){
     var d = new Date(iso + "T00:00:00");
     return d.toLocaleDateString("es", {weekday:"short", day:"numeric", month:"short"});
+  }
+  function pad2(n){ return (n < 10 ? "0" : "") + n; }
+  function currentYm(){
+    var d = new Date();
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1);
+  }
+  function shiftYm(ym, delta){
+    var parts = ym.split("-");
+    var d = new Date(parseInt(parts[0],10), parseInt(parts[1],10) - 1 + delta, 1);
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1);
+  }
+  function ymLabel(ym){
+    var parts = ym.split("-");
+    var d = new Date(parseInt(parts[0],10), parseInt(parts[1],10) - 1, 1);
+    var label = d.toLocaleDateString("es", {month:"long", year:"numeric"});
+    return label.charAt(0).toUpperCase() + label.slice(1);
   }
   function currentName(){
     return (ui.name || "").trim() || "Alguien";
@@ -958,8 +994,48 @@
       '</div>';
   }
 
+  function buildCalendarGridHtml(){
+    if(!ui.calMonth) ui.calMonth = currentYm();
+    var parts = ui.calMonth.split("-");
+    var year = parseInt(parts[0],10), month = parseInt(parts[1],10) - 1;
+    var firstOfMonth = new Date(year, month, 1);
+    var startOffset = (firstOfMonth.getDay() + 6) % 7;
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+    var todayStr = new Date().toISOString().slice(0,10);
+
+    var byDate = {};
+    currentProperty().calendar.forEach(function(e){ (byDate[e.date] = byDate[e.date] || []).push(e); });
+
+    var cells = "";
+    for(var i = 0; i < startOffset; i++){ cells += '<div class="cal-cell empty"></div>'; }
+    for(var day = 1; day <= daysInMonth; day++){
+      var dateStr = year + "-" + pad2(month + 1) + "-" + pad2(day);
+      var entries = byDate[dateStr] || [];
+      var classes = "cal-cell" +
+        (dateStr === todayStr ? " today" : "") +
+        (dateStr === ui.calSelectedDate ? " selected" : "") +
+        (entries.length ? " has-entries" : "");
+      var dots = entries.length ? '<div class="cal-dots">' + entries.map(function(){ return '<span class="cal-dot"></span>'; }).join("") + '</div>' : "";
+      cells += '<button type="button" class="' + classes + '" data-click="cal-select-day" data-date="' + dateStr + '">' +
+        '<span>' + day + '</span>' + dots +
+      '</button>';
+    }
+
+    var weekdayLabels = ["L","M","M","J","V","S","D"];
+    return '' +
+      '<div class="cal-nav">' +
+        '<button type="button" class="icon-btn" data-click="cal-prev-month" aria-label="Mes anterior">‹</button>' +
+        '<div class="cal-month-label">' + ymLabel(ui.calMonth) + '</div>' +
+        '<button type="button" class="icon-btn" data-click="cal-next-month" aria-label="Mes siguiente">›</button>' +
+      '</div>' +
+      '<div class="cal-grid cal-weekdays">' + weekdayLabels.map(function(w){ return '<div class="cal-weekday">' + w + '</div>'; }).join("") + '</div>' +
+      '<div class="cal-grid">' + cells + '</div>';
+  }
+
   function buildPlanificadorHtml(){
     var html = "";
+
+    html += '<div class="calendar-panel">' + buildCalendarGridHtml() + '</div>';
 
     if(!readOnly){
       if(ui.calFormOpen){
@@ -974,9 +1050,16 @@
     var byDate = {};
     currentProperty().calendar.forEach(function(e){ (byDate[e.date] = byDate[e.date] || []).push(e); });
     var dates = Object.keys(byDate).sort();
+    if(ui.calSelectedDate) dates = dates.filter(function(d){ return d === ui.calSelectedDate; });
+
+    if(ui.calSelectedDate){
+      html += '<button type="button" class="btn btn-ghost" data-click="cal-clear-selection" style="margin-bottom:10px;">✕ Ver todo el mes</button>';
+    }
 
     if(dates.length === 0){
-      html += '<div class="empty-state"><strong>Nada planeado todavía</strong>Agrega qué van a preparar en cada comida de la estancia.</div>';
+      html += ui.calSelectedDate ?
+        ('<div class="empty-state"><strong>Nada planeado ese día</strong>Agrega qué van a preparar el ' + fmtDate(ui.calSelectedDate) + '.</div>') :
+        '<div class="empty-state"><strong>Nada planeado todavía</strong>Agrega qué van a preparar en cada comida de la estancia.</div>';
     } else {
       dates.forEach(function(date){
         var entries = byDate[date].slice().sort(function(a,b){ return (MEAL_ORDER[a.meal]||0) - (MEAL_ORDER[b.meal]||0); });
@@ -1003,7 +1086,7 @@
 
   function renderCalForm(){
     var recipesSorted = currentProperty().recipes.slice().sort(function(a,b){ return a.name.localeCompare(b.name,"es"); });
-    var today = new Date().toISOString().slice(0,10);
+    var today = ui.calSelectedDate || new Date().toISOString().slice(0,10);
     return '' +
       '<form class="card form-card" id="form-cal">' +
         '<h3 style="margin-bottom:12px;">Planear comida</h3>' +
@@ -1281,6 +1364,22 @@
 
       case "open-add-cal":
         ui.calFormOpen = true;
+        render();
+        break;
+      case "cal-select-day":
+        ui.calSelectedDate = (ui.calSelectedDate === t.getAttribute("data-date")) ? null : t.getAttribute("data-date");
+        render();
+        break;
+      case "cal-prev-month":
+        ui.calMonth = shiftYm(ui.calMonth || currentYm(), -1);
+        render();
+        break;
+      case "cal-next-month":
+        ui.calMonth = shiftYm(ui.calMonth || currentYm(), 1);
+        render();
+        break;
+      case "cal-clear-selection":
+        ui.calSelectedDate = null;
         render();
         break;
       case "cancel-cal-form":
