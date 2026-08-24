@@ -340,9 +340,8 @@
 
 </head>
 <body>
-<div class="wrap"><header class="app-header" id="app-header-inner"></header><section class="panel active" id="panel-home"></section><nav class="tabs hidden" id="tabs"></nav><section class="panel" id="panel-inventario"></section><section class="panel" id="panel-recetas"></section><section class="panel" id="panel-planificador"></section></div><div class="toast hidden" id="toast"></div><button type="button" class="btn btn-ghost hidden" id="signout-btn">Cerrar sesión</button><div class="auth-gate" id="auth-gate"><div class="auth-card"><div class="brand-mark" style="margin:0 auto 14px;">🏖️</div><h2>Inventario</h2><p>Inicia sesión con Google para ver y editar el inventario compartido de la casa de playa.</p><button type="button" class="btn btn-primary btn-block" id="google-signin-btn">Iniciar sesión con Google</button></div></div>
+<div class="wrap"><header class="app-header" id="app-header-inner"></header><section class="panel active" id="panel-home"></section><nav class="tabs hidden" id="tabs"></nav><section class="panel" id="panel-inventario"></section><section class="panel" id="panel-recetas"></section><section class="panel" id="panel-planificador"></section></div><div class="toast hidden" id="toast"></div>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script>
 
@@ -488,7 +487,6 @@
     appId: "1:297391372660:web:b71120bb2d02e329cc1421"
   };
   firebase.initializeApp(firebaseConfig);
-  var auth = firebase.auth();
   var db = firebase.firestore();
   try{ db.enablePersistence(); }catch(e){}
   var DOC_REF = db.collection("shared").doc("inventario-casa-playa");
@@ -1451,35 +1449,7 @@
   // ---------- init ----------
   function init(){
     render();
-    var gate = document.getElementById("auth-gate");
-    var signinBtn = document.getElementById("google-signin-btn");
-    var signoutBtn = document.getElementById("signout-btn");
-    signinBtn.addEventListener("click", function(){
-      signinBtn.disabled = true;
-      var provider = new firebase.auth.GoogleAuthProvider();
-      auth.signInWithPopup(provider).catch(function(e){
-        if(e.code !== "auth/popup-closed-by-user" && e.code !== "auth/cancelled-popup-request"){
-          showToast("No se pudo iniciar sesión: " + (e.message || e.code), "error");
-        }
-      }).finally(function(){ signinBtn.disabled = false; });
-    });
-    signoutBtn.addEventListener("click", function(){ auth.signOut(); });
-    auth.onAuthStateChanged(function(user){
-      if(user){
-        gate.classList.add("hidden");
-        signoutBtn.classList.remove("hidden");
-        if(!ui.name && user.displayName){
-          ui.name = user.displayName;
-          localStorage.setItem(NAME_KEY, ui.name);
-        }
-        attachSync();
-      } else {
-        gate.classList.remove("hidden");
-        signoutBtn.classList.add("hidden");
-        state = defaultState();
-        render();
-      }
-    });
+    attachSync();
   }
 
   init();
