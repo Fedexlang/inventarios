@@ -346,16 +346,20 @@
   .cal-weekdays{margin-bottom:4px;}
   .cal-weekday{text-align:center;font-size:0.72rem;color:var(--ink-muted);font-weight:700;text-transform:uppercase;}
   .cal-cell{
-    aspect-ratio:1;border:1px solid var(--border);border-radius:8px;background:var(--surface);
-    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
-    font-size:0.82rem;color:var(--ink);cursor:pointer;padding:2px;font-family:inherit;
+    border:1px solid var(--border);border-radius:8px;background:var(--surface);
+    display:flex;flex-direction:column;align-items:stretch;gap:1px;text-align:left;
+    font-size:0.68rem;color:var(--ink);cursor:pointer;padding:4px;font-family:inherit;min-height:74px;
   }
   .cal-cell:hover{border-color:var(--accent);}
-  .cal-cell.empty{border:none;background:none;cursor:default;}
-  .cal-cell.today{border-color:var(--accent);font-weight:700;}
+  .cal-cell.empty{border:none;background:none;cursor:default;min-height:74px;}
+  .cal-cell.today{border-color:var(--accent);}
   .cal-cell.selected{background:var(--accent-soft);border-color:var(--accent);}
-  .cal-dots{display:flex;gap:2px;}
-  .cal-dot{width:5px;height:5px;border-radius:50%;background:var(--accent);}
+  .cal-daynum{font-size:0.78rem;font-weight:700;margin-bottom:2px;}
+  .cal-meal-slot{
+    min-height:1.2em;font-size:0.64rem;line-height:1.2;color:var(--ink-muted);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .cal-meal-slot.filled{color:var(--accent-deep);font-weight:600;}
 </style>
 
 </head>
@@ -1015,9 +1019,15 @@
         (dateStr === todayStr ? " today" : "") +
         (dateStr === ui.calSelectedDate ? " selected" : "") +
         (entries.length ? " has-entries" : "");
-      var dots = entries.length ? '<div class="cal-dots">' + entries.map(function(){ return '<span class="cal-dot"></span>'; }).join("") + '</div>' : "";
+      var slots = ["Desayuno","Almuerzo","Cena"].map(function(mealName){
+        var entry = entries.filter(function(e){ return e.meal === mealName; })[0];
+        if(!entry) return '<div class="cal-meal-slot"></div>';
+        var recipe = currentProperty().recipes.find(function(r){ return r.id === entry.recipeId; });
+        var label = recipe ? recipe.name : "";
+        return '<div class="cal-meal-slot filled">' + esc(label) + '</div>';
+      }).join("");
       cells += '<button type="button" class="' + classes + '" data-click="cal-select-day" data-date="' + dateStr + '">' +
-        '<span>' + day + '</span>' + dots +
+        '<div class="cal-daynum">' + day + '</div>' + slots +
       '</button>';
     }
 
