@@ -599,18 +599,28 @@
   function ingredientAvailability(ing){
     var item = currentProperty().inventory.find(function(i){ return i.id === ing.itemId; });
     var available = item ? item.quantity : 0;
-    var status = available <= 0 ? "critical" : (available < ing.quantity ? "warn" : "good");
+    var status;
+    if(ing.any){
+      status = available <= 0 ? "critical" : "good";
+    } else {
+      status = available <= 0 ? "critical" : (available < ing.quantity ? "warn" : "good");
+    }
     return { item: item, available: available, status: status };
   }
 
   function computeShoppingList(){
     var totals = {};
+    var anyIds = {};
     currentProperty().calendar.forEach(function(entry){
       var recipe = currentProperty().recipes.find(function(r){ return r.id === entry.recipeId; });
       if(!recipe) return;
-      var servings = entry.servings || 1;
+      var multiplier = (entry.servings || 1) / (recipe.yield || 1);
       recipe.ingredients.forEach(function(ing){
-        totals[ing.itemId] = (totals[ing.itemId] || 0) + ing.quantity * servings;
+        if(ing.any){
+          anyIds[ing.itemId] = true;
+        } else {
+          totals[ing.itemId] = (totals[ing.itemId] || 0) + ing.quantity * multiplier;
+        }
       });
     });
     var list = [];
@@ -625,6 +635,14 @@
           isFraction: item ? item.isFraction : false,
           unit: item ? item.unit : ""
         });
+      }
+    });
+    Object.keys(anyIds).forEach(function(itemId){
+      if(totals.hasOwnProperty(itemId)) return;
+      var item = currentProperty().inventory.find(function(i){ return i.id === itemId; });
+      var available = item ? item.quantity : 0;
+      if(available <= 0){
+        list.push({ name: item ? item.name : "(artículo eliminado)", outOfStock: true });
       }
     });
     list.sort(function(a,b){ return a.name.localeCompare(b.name, "es"); });
@@ -881,8 +899,11 @@
             '<input type="hidden" id="ing-item-id-' + idx + '" value="' + (ing.itemId || "") + '">' +
             '<div class="combo-list hidden" id="ing-combo-' + idx + '"></div>' +
           '</div>' +
-          '<div class="field"><label>Cantidad por ración</label><input type="number" id="ing-qty-' + idx + '" min="0" step="0.01" value="' + (ing.quantity != null ? ing.quantity : "") + '"></div>' +
+          '<div class="field qty-field" id="ing-qty-field-' + idx + '" style="' + (ing.any ? "display:none;" : "") + '"><label>Cantidad</label><input type="number" id="ing-qty-' + idx + '" min="0" step="0.01" value="' + (ing.quantity != null ? ing.quantity : "") + '"></div>' +
           '<button type="button" class="icon-btn" data-click="recipe-remove-row" data-index="' + idx + '" aria-label="Quitar" style="align-self:end;">✕</button>' +
+          '<label class="any-toggle" style="grid-column:1 / -1;display:flex;align-items:center;gap:6px;font-size:0.8rem;color:var(--ink-muted);">' +
+            '<input type="checkbox" class="ing-any-toggle" data-index="' + idx + '" id="ing-any-' + idx + '"' + (ing.any ? " checked" : "") + '> Solo que haya (no importa cuánto)' +
+          '</label>' +
         '</div>';
     }).join("");
 
@@ -891,8 +912,9 @@
       '<form class="card form-card" id="form-recipe" data-mode="' + mode + '" data-recipe-id="' + (recipe ? recipe.id : "") + '">' +
         '<h3 style="margin-bottom:12px;">' + title + '</h3>' +
         '<div class="field span-2" style="margin-bottom:12px;"><label>Nombre</label><input type="text" id="recipe-form-name" required value="' + esc(draft.name) + '" placeholder="Ej. Hamburguesas"></div>' +
+        '<div class="field" style="max-width:180px;margin-bottom:12px;"><label>Rinde (raciones)</label><input type="number" id="recipe-form-yield" min="1" step="1" value="' + (draft.yield || 1) + '"></div>' +
         '<label style="font-size:0.78rem;color:var(--ink-muted);font-weight:600;">Ingredientes</label>' +
-        '<p class="muted-line" style="margin:2px 0 6px;">La cantidad es por cada ración. Para algo compartido como salsas, usa una fracción (ej. 0.15 de un frasco).</p>' +
+        '<p class="muted-line" style="margin:2px 0 6px;">Cantidad = lo que usa la receta completa (para las raciones de arriba). Para algo compartido como salsas, marca "Solo que haya" en vez de poner cantidad.</p>' +
         '<div style="margin-top:6px;">' + (rows || '<p class="muted-line">Agrega al menos un ingrediente.</p>') + '</div>' +
         '<button type="button" class="btn btn-ghost" data-click="recipe-add-row" style="margin-bottom:14px;">+ Agregar ingrediente</button>' +
         '<div class="field span-2" style="margin-bottom:12px;"><label>Notas (opcional)</label><textarea id="recipe-form-notes" placeholder="Instrucciones o notas…">' + esc(draft.notes) + '</textarea></div>' +
@@ -907,8 +929,13 @@
     var deleting = ui.pendingDelete && ui.pendingDelete.type === "recipe" && ui.pendingDelete.id === recipe.id;
     var chips = recipe.ingredients.map(function(ing){
       var av = ingredientAvailability(ing);
-      var label = (av.item ? esc(av.item.name) : "(eliminado)") + " · " +
-        trimNum(ing.quantity) + (av.item ? " " + esc(av.item.unit||"") : "");
+      var label;
+      if(ing.any){
+        label = (av.item ? esc(av.item.name) : "(eliminado)") + " · hay " + trimNum(av.available) + (av.item ? " " + esc(av.item.unit||"") : "");
+      } else {
+        label = (av.item ? esc(av.item.name) : "(eliminado)") + " · " +
+          trimNum(ing.quantity) + (av.item ? " " + esc(av.item.unit||"") : "");
+      }
       return '<span class="ing-chip ' + av.status + '">' + label + '</span>';
     }).join("");
 
@@ -925,6 +952,7 @@
     return '' +
       '<div class="card recipe-card">' +
         '<div class="item-top"><div class="recipe-name">' + esc(recipe.name) + '</div>' + actions + '</div>' +
+        '<div class="muted-line">Rinde ' + (recipe.yield || 1) + ' ración' + ((recipe.yield||1) === 1 ? '' : 'es') + '</div>' +
         '<div class="ingredient-list">' + chips + '</div>' +
         (recipe.notes ? '<div class="recipe-notes">' + esc(recipe.notes) + '</div>' : '') +
       '</div>';
@@ -964,8 +992,8 @@
       html += '<div class="empty-state">Con lo planeado hasta ahora, no falta nada en la despensa.</div>';
     } else {
       html += '<div class="card"><div class="shopping-list">' + shopping.map(function(s){
-        var qtyLabel = trimNum(s.missing) + " " + esc(s.unit||"");
-        return '<div class="shopping-item"><span>' + esc(s.name) + '</span><span class="qty">falta ' + qtyLabel + '</span></div>';
+        var qtyLabel = s.outOfStock ? "agotado" : ("falta " + trimNum(s.missing) + " " + esc(s.unit||""));
+        return '<div class="shopping-item"><span>' + esc(s.name) + '</span><span class="qty">' + qtyLabel + '</span></div>';
       }).join("") + '</div></div>';
     }
     html += '</div>';
@@ -1002,9 +1030,10 @@
     var statusBadge = "";
     if(recipe){
       var worst = "good";
-      var servings = entry.servings || 1;
+      var multiplier = (entry.servings || 1) / (recipe.yield || 1);
       recipe.ingredients.forEach(function(ing){
-        var av = ingredientAvailability({ itemId: ing.itemId, quantity: ing.quantity * servings });
+        var checkIng = ing.any ? ing : { itemId: ing.itemId, quantity: ing.quantity * multiplier };
+        var av = ingredientAvailability(checkIng);
         if(av.status === "critical") worst = "critical";
         else if(av.status === "warn" && worst !== "critical") worst = "warn";
       });
@@ -1194,7 +1223,7 @@
 
       case "open-add-recipe":
         ui.recipeFormOpen = true; ui.recipeEditingId = null;
-        ui.recipeDraft = { name:"", notes:"", ingredients:[{itemId:"", quantity:1}] };
+        ui.recipeDraft = { name:"", notes:"", yield:1, ingredients:[{itemId:"", quantity:1, any:false}] };
         render();
         break;
       case "edit-recipe":
@@ -1205,7 +1234,8 @@
           ui.recipeDraft = {
             name: recipe.name,
             notes: recipe.notes || "",
-            ingredients: recipe.ingredients.map(function(ing){ return { itemId: ing.itemId, quantity: ing.quantity }; })
+            yield: recipe.yield || 1,
+            ingredients: recipe.ingredients.map(function(ing){ return { itemId: ing.itemId, quantity: ing.quantity != null ? ing.quantity : 1, any: !!ing.any }; })
           };
         })();
         render();
@@ -1216,13 +1246,13 @@
         break;
       case "recipe-add-row":
         harvestRecipeDraft();
-        ui.recipeDraft.ingredients.push({itemId:"", quantity:1});
+        ui.recipeDraft.ingredients.push({itemId:"", quantity:1, any:false});
         render();
         break;
       case "recipe-remove-row":
         harvestRecipeDraft();
         ui.recipeDraft.ingredients.splice(parseInt(t.getAttribute("data-index"),10), 1);
-        if(ui.recipeDraft.ingredients.length === 0) ui.recipeDraft.ingredients.push({itemId:"", quantity:1});
+        if(ui.recipeDraft.ingredients.length === 0) ui.recipeDraft.ingredients.push({itemId:"", quantity:1, any:false});
         render();
         break;
       case "recipe-pick-ingredient":
@@ -1306,6 +1336,11 @@
       document.getElementById("item-form-whole-field").style.display = isFraction ? "" : "none";
       document.getElementById("item-form-openpct-field").style.display = isFraction ? "" : "none";
     }
+    if(e.target.classList.contains("ing-any-toggle")){
+      var qIdx = e.target.getAttribute("data-index");
+      var qField = document.getElementById("ing-qty-field-" + qIdx);
+      if(qField) qField.style.display = e.target.checked ? "none" : "";
+    }
   });
 
   document.addEventListener("input", function(e){
@@ -1350,13 +1385,17 @@
   function harvestRecipeDraft(){
     var nameEl = document.getElementById("recipe-form-name");
     var notesEl = document.getElementById("recipe-form-notes");
+    var yieldEl = document.getElementById("recipe-form-yield");
     if(nameEl) ui.recipeDraft.name = nameEl.value;
     if(notesEl) ui.recipeDraft.notes = notesEl.value;
+    if(yieldEl) ui.recipeDraft.yield = parseInt(yieldEl.value, 10) || 1;
     ui.recipeDraft.ingredients.forEach(function(ing, idx){
       var hidden = document.getElementById("ing-item-id-" + idx);
       var qty = document.getElementById("ing-qty-" + idx);
+      var any = document.getElementById("ing-any-" + idx);
       if(hidden) ing.itemId = hidden.value;
       if(qty) ing.quantity = parseFloat(qty.value) || 0;
+      if(any) ing.any = any.checked;
     });
   }
 
@@ -1402,20 +1441,23 @@
     harvestRecipeDraft();
     var draft = ui.recipeDraft;
     var name = (draft.name || "").trim();
-    var ingredients = draft.ingredients.filter(function(i){ return i.itemId && i.quantity > 0; });
+    var ingredients = draft.ingredients.filter(function(i){ return i.itemId && (i.any || i.quantity > 0); });
     if(!name || ingredients.length === 0) return;
     var mode = form.getAttribute("data-mode");
-    var mappedIngredients = ingredients.map(function(i){ return {itemId:i.itemId, quantity:i.quantity}; });
+    var recipeYield = Math.max(1, parseInt(draft.yield, 10) || 1);
+    var mappedIngredients = ingredients.map(function(i){
+      return i.any ? {itemId:i.itemId, any:true} : {itemId:i.itemId, quantity:i.quantity};
+    });
     if(mode === "edit"){
       var recipeId = form.getAttribute("data-recipe-id");
       var recipe = currentProperty().recipes.find(function(r){ return r.id === recipeId; });
       if(recipe){
-        recipe.name = name; recipe.notes = (draft.notes||"").trim(); recipe.ingredients = mappedIngredients;
+        recipe.name = name; recipe.notes = (draft.notes||"").trim(); recipe.yield = recipeYield; recipe.ingredients = mappedIngredients;
         touch(recipe);
       }
       ui.recipeEditingId = null;
     } else {
-      var newRecipe = { id: uid("recipe"), name:name, notes:(draft.notes||"").trim(), ingredients: mappedIngredients };
+      var newRecipe = { id: uid("recipe"), name:name, notes:(draft.notes||"").trim(), yield:recipeYield, ingredients: mappedIngredients };
       touch(newRecipe);
       currentProperty().recipes.push(newRecipe);
       ui.recipeFormOpen = false;
