@@ -1272,6 +1272,10 @@
         render();
         break;
       case "open-add-property":
+        if(prompt("Código para crear un espacio nuevo:") !== "1440"){
+          showToast("Código incorrecto.", "error");
+          break;
+        }
         ui.propertyFormOpen = true;
         render();
         break;
