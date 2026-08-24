@@ -439,6 +439,7 @@
     recipeDraft: null,
     recipeEditingId: null,
     calFormOpen: false,
+    calEditingId: null,
     calMonth: null,
     calSelectedDate: null,
     pendingDelete: null,
@@ -1054,8 +1055,11 @@
     html += '<div class="calendar-panel">' + buildCalendarGridHtml() + '</div>';
 
     if(!readOnly){
-      if(ui.calFormOpen){
-        html += renderCalForm();
+      if(ui.calEditingId){
+        var editingEntry = currentProperty().calendar.find(function(c){ return c.id === ui.calEditingId; });
+        if(editingEntry) html += renderCalForm("edit", editingEntry);
+      } else if(ui.calFormOpen){
+        html += renderCalForm("add", null);
       } else {
         html += '<button type="button" class="btn btn-primary" data-click="open-add-cal" style="margin-bottom:16px;">+ Planear comida</button>';
       }
@@ -1098,33 +1102,35 @@
     return html;
   }
 
-  function renderCalForm(){
+  function renderCalForm(mode, entry){
     var recipesSorted = currentProperty().recipes.slice().sort(function(a,b){ return a.name.localeCompare(b.name,"es"); });
-    var today = ui.calSelectedDate || new Date().toISOString().slice(0,10);
+    var today = (entry ? entry.date : null) || ui.calSelectedDate || new Date().toISOString().slice(0,10);
+    var isLibre = entry ? !entry.recipeId : false;
+    var title = mode === "edit" ? "Editar comida" : "Planear comida";
     return '' +
-      '<form class="card form-card" id="form-cal">' +
-        '<h3 style="margin-bottom:12px;">Planear comida</h3>' +
+      '<form class="card form-card" id="form-cal" data-mode="' + mode + '" data-cal-id="' + (entry ? entry.id : "") + '">' +
+        '<h3 style="margin-bottom:12px;">' + title + '</h3>' +
         '<div class="form-grid">' +
           '<div class="field"><label>Fecha</label><input type="date" id="cal-form-date" required value="' + today + '"></div>' +
           '<div class="field"><label>Comida</label><select id="cal-form-meal">' +
-            '<option>Desayuno</option><option>Almuerzo</option><option>Cena</option>' +
+            ["Desayuno","Almuerzo","Cena"].map(function(m){ return '<option' + (entry && entry.meal === m ? " selected" : "") + '>' + m + '</option>'; }).join("") +
           '</select></div>' +
           '<div class="field span-2">' +
             '<label>&nbsp;</label>' +
             '<div class="segmented">' +
-              '<label><input type="radio" name="cal-form-mode" value="receta" checked><span>Con receta (revisa ingredientes)</span></label>' +
-              '<label><input type="radio" name="cal-form-mode" value="libre"><span>Solo anotar (sin receta)</span></label>' +
+              '<label><input type="radio" name="cal-form-mode" value="receta"' + (!isLibre ? " checked" : "") + '><span>Con receta (revisa ingredientes)</span></label>' +
+              '<label><input type="radio" name="cal-form-mode" value="libre"' + (isLibre ? " checked" : "") + '><span>Solo anotar (sin receta)</span></label>' +
             '</div>' +
           '</div>' +
-          '<div class="field span-2" id="cal-recipe-field"><label>Receta</label><select id="cal-form-recipe">' +
-            recipesSorted.map(function(r){ return '<option value="' + r.id + '">' + esc(r.name) + '</option>'; }).join("") +
+          '<div class="field span-2' + (isLibre ? " hidden" : "") + '" id="cal-recipe-field"><label>Receta</label><select id="cal-form-recipe">' +
+            recipesSorted.map(function(r){ return '<option value="' + r.id + '"' + (entry && entry.recipeId === r.id ? " selected" : "") + '>' + esc(r.name) + '</option>'; }).join("") +
           '</select></div>' +
-          '<div class="field" id="cal-servings-field"><label>Raciones</label><input type="number" id="cal-form-servings" min="1" step="1" value="1"></div>' +
-          '<div class="field span-2 hidden" id="cal-custom-field"><label>¿Qué van a comer?</label><input type="text" id="cal-form-custom-name" placeholder="Ej. Arroz con pollo (lo llevo de casa)"></div>' +
+          '<div class="field' + (isLibre ? " hidden" : "") + '" id="cal-servings-field"><label>Raciones</label><input type="number" id="cal-form-servings" min="1" step="1" value="' + (entry && entry.servings ? entry.servings : 1) + '"></div>' +
+          '<div class="field span-2' + (isLibre ? "" : " hidden") + '" id="cal-custom-field"><label>¿Qué van a comer?</label><input type="text" id="cal-form-custom-name" placeholder="Ej. Arroz con pollo (lo llevo de casa)" value="' + esc(isLibre && entry ? (entry.customName||"") : "") + '"></div>' +
         '</div>' +
         '<div class="form-actions">' +
           '<button type="button" class="btn btn-ghost" data-click="cancel-cal-form">Cancelar</button>' +
-          '<button type="submit" class="btn btn-primary">Agregar al plan</button>' +
+          '<button type="submit" class="btn btn-primary">' + (mode === "edit" ? "Guardar cambios" : "Agregar al plan") + '</button>' +
         '</div>' +
       '</form>';
   }
@@ -1150,7 +1156,10 @@
         '<button type="button" class="btn btn-danger" style="padding:5px 9px;font-size:0.78rem;" data-click="delete-cal-confirm" data-id="' + entry.id + '">Eliminar</button>' +
         '<button type="button" class="icon-btn" data-click="delete-cal-cancel">✕</button>' +
       '</div>' :
-      '<button type="button" class="icon-btn" data-click="delete-cal-request" data-id="' + entry.id + '" aria-label="Eliminar">🗑</button>');
+      '<div style="display:flex;gap:4px;">' +
+        '<button type="button" class="icon-btn" data-click="edit-cal" data-id="' + entry.id + '" aria-label="Editar">✎</button>' +
+        '<button type="button" class="icon-btn" data-click="delete-cal-request" data-id="' + entry.id + '" aria-label="Eliminar">🗑</button>' +
+      '</div>');
 
     var mealLabel = entry.recipeId ?
       (recipe ? recipe.name : "(receta eliminada)") :
@@ -1389,7 +1398,11 @@
         break;
 
       case "open-add-cal":
-        ui.calFormOpen = true;
+        ui.calFormOpen = true; ui.calEditingId = null;
+        render();
+        break;
+      case "edit-cal":
+        ui.calEditingId = id; ui.calFormOpen = false;
         render();
         break;
       case "cal-select-day":
@@ -1409,7 +1422,7 @@
         render();
         break;
       case "cancel-cal-form":
-        ui.calFormOpen = false;
+        ui.calFormOpen = false; ui.calEditingId = null;
         render();
         break;
       case "delete-cal-request":
@@ -1600,22 +1613,35 @@
   function submitCalForm(form){
     var date = document.getElementById("cal-form-date").value;
     var meal = document.getElementById("cal-form-meal").value;
-    var mode = document.querySelector('input[name="cal-form-mode"]:checked').value;
+    var kind = document.querySelector('input[name="cal-form-mode"]:checked').value;
     if(!date) return;
-    var entry;
-    if(mode === "libre"){
+    var fields;
+    if(kind === "libre"){
       var customName = document.getElementById("cal-form-custom-name").value.trim();
       if(!customName) return;
-      entry = { id: uid("cal"), date:date, meal:meal, recipeId:null, customName:customName };
+      fields = { date:date, meal:meal, recipeId:null, customName:customName, servings:null };
     } else {
       var recipeId = document.getElementById("cal-form-recipe").value;
       var servings = parseInt(document.getElementById("cal-form-servings").value, 10) || 1;
       if(!recipeId) return;
-      entry = { id: uid("cal"), date:date, meal:meal, recipeId:recipeId, servings:servings };
+      fields = { date:date, meal:meal, recipeId:recipeId, servings:servings, customName:null };
     }
-    touch(entry);
-    currentProperty().calendar.push(entry);
-    ui.calFormOpen = false;
+    var mode = form.getAttribute("data-mode");
+    if(mode === "edit"){
+      var calId = form.getAttribute("data-cal-id");
+      var entry = currentProperty().calendar.find(function(c){ return c.id === calId; });
+      if(entry){
+        entry.date = fields.date; entry.meal = fields.meal; entry.recipeId = fields.recipeId;
+        entry.customName = fields.customName; entry.servings = fields.servings;
+        touch(entry);
+      }
+      ui.calEditingId = null;
+    } else {
+      var newEntry = Object.assign({ id: uid("cal") }, fields);
+      touch(newEntry);
+      currentProperty().calendar.push(newEntry);
+      ui.calFormOpen = false;
+    }
     scheduleSave(); render();
   }
 
