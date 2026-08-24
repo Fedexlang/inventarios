@@ -360,6 +360,7 @@
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   }
   .cal-meal-slot.filled{color:var(--accent-deep);font-weight:600;}
+  .field.hidden{display:none;}
 </style>
 
 </head>
@@ -1022,8 +1023,13 @@
       var slots = ["Desayuno","Almuerzo","Cena"].map(function(mealName){
         var entry = entries.filter(function(e){ return e.meal === mealName; })[0];
         if(!entry) return '<div class="cal-meal-slot"></div>';
-        var recipe = currentProperty().recipes.find(function(r){ return r.id === entry.recipeId; });
-        var label = recipe ? recipe.name : "";
+        var label;
+        if(entry.recipeId){
+          var recipe = currentProperty().recipes.find(function(r){ return r.id === entry.recipeId; });
+          label = recipe ? recipe.name : "";
+        } else {
+          label = entry.customName || "";
+        }
         return '<div class="cal-meal-slot filled">' + esc(label) + '</div>';
       }).join("");
       cells += '<button type="button" class="' + classes + '" data-click="cal-select-day" data-date="' + dateStr + '">' +
@@ -1050,8 +1056,6 @@
     if(!readOnly){
       if(ui.calFormOpen){
         html += renderCalForm();
-      } else if(currentProperty().recipes.length === 0){
-        html += '<div class="empty-state" style="margin-bottom:16px;"><strong>Primero agrega recetas</strong>Necesitas recetas antes de poder planear comidas.</div>';
       } else {
         html += '<button type="button" class="btn btn-primary" data-click="open-add-cal" style="margin-bottom:16px;">+ Planear comida</button>';
       }
@@ -1105,10 +1109,18 @@
           '<div class="field"><label>Comida</label><select id="cal-form-meal">' +
             '<option>Desayuno</option><option>Almuerzo</option><option>Cena</option>' +
           '</select></div>' +
-          '<div class="field span-2"><label>Receta</label><select id="cal-form-recipe">' +
+          '<div class="field span-2">' +
+            '<label>&nbsp;</label>' +
+            '<div class="segmented">' +
+              '<label><input type="radio" name="cal-form-mode" value="receta" checked><span>Con receta (revisa ingredientes)</span></label>' +
+              '<label><input type="radio" name="cal-form-mode" value="libre"><span>Solo anotar (sin receta)</span></label>' +
+            '</div>' +
+          '</div>' +
+          '<div class="field span-2" id="cal-recipe-field"><label>Receta</label><select id="cal-form-recipe">' +
             recipesSorted.map(function(r){ return '<option value="' + r.id + '">' + esc(r.name) + '</option>'; }).join("") +
           '</select></div>' +
-          '<div class="field"><label>Raciones</label><input type="number" id="cal-form-servings" min="1" step="1" value="1"></div>' +
+          '<div class="field" id="cal-servings-field"><label>Raciones</label><input type="number" id="cal-form-servings" min="1" step="1" value="1"></div>' +
+          '<div class="field span-2 hidden" id="cal-custom-field"><label>¿Qué van a comer?</label><input type="text" id="cal-form-custom-name" placeholder="Ej. Arroz con pollo (lo llevo de casa)"></div>' +
         '</div>' +
         '<div class="form-actions">' +
           '<button type="button" class="btn btn-ghost" data-click="cancel-cal-form">Cancelar</button>' +
@@ -1140,11 +1152,15 @@
       '</div>' :
       '<button type="button" class="icon-btn" data-click="delete-cal-request" data-id="' + entry.id + '" aria-label="Eliminar">🗑</button>');
 
+    var mealLabel = entry.recipeId ?
+      (recipe ? recipe.name : "(receta eliminada)") :
+      (entry.customName || "");
+
     return '' +
       '<div class="meal-slot">' +
         '<div class="meal-slot-main">' +
           '<span class="meal-tag">' + entry.meal + (entry.servings > 1 ? " · " + entry.servings + " raciones" : "") + '</span>' +
-          '<span class="meal-recipe">' + esc(recipe ? recipe.name : "(receta eliminada)") + '</span>' +
+          '<span class="meal-recipe">' + esc(mealLabel) + '</span>' +
         '</div>' +
         '<div class="meal-slot-actions">' + statusBadge + actions + '</div>' +
       '</div>';
@@ -1450,6 +1466,12 @@
       var qField = document.getElementById("ing-qty-field-" + qIdx);
       if(qField) qField.style.display = e.target.checked ? "none" : "";
     }
+    if(e.target.name === "cal-form-mode"){
+      var isLibre = e.target.value === "libre";
+      document.getElementById("cal-recipe-field").classList.toggle("hidden", isLibre);
+      document.getElementById("cal-servings-field").classList.toggle("hidden", isLibre);
+      document.getElementById("cal-custom-field").classList.toggle("hidden", !isLibre);
+    }
   });
 
   document.addEventListener("input", function(e){
@@ -1578,10 +1600,19 @@
   function submitCalForm(form){
     var date = document.getElementById("cal-form-date").value;
     var meal = document.getElementById("cal-form-meal").value;
-    var recipeId = document.getElementById("cal-form-recipe").value;
-    var servings = parseInt(document.getElementById("cal-form-servings").value, 10) || 1;
-    if(!date || !recipeId) return;
-    var entry = { id: uid("cal"), date:date, meal:meal, recipeId:recipeId, servings:servings };
+    var mode = document.querySelector('input[name="cal-form-mode"]:checked').value;
+    if(!date) return;
+    var entry;
+    if(mode === "libre"){
+      var customName = document.getElementById("cal-form-custom-name").value.trim();
+      if(!customName) return;
+      entry = { id: uid("cal"), date:date, meal:meal, recipeId:null, customName:customName };
+    } else {
+      var recipeId = document.getElementById("cal-form-recipe").value;
+      var servings = parseInt(document.getElementById("cal-form-servings").value, 10) || 1;
+      if(!recipeId) return;
+      entry = { id: uid("cal"), date:date, meal:meal, recipeId:recipeId, servings:servings };
+    }
     touch(entry);
     currentProperty().calendar.push(entry);
     ui.calFormOpen = false;
