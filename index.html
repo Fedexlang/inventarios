@@ -650,52 +650,57 @@
   }
 
   function ingredientAvailability(ing){
+    var items = ingredientItemIds(ing).map(function(id){
+      return currentProperty().inventory.find(function(i){ return i.id === id; });
+    }).filter(Boolean);
     if(ing.any){
-      var items = ingredientItemIds(ing).map(function(id){
-        return currentProperty().inventory.find(function(i){ return i.id === id; });
-      }).filter(Boolean);
       var inStock = items.filter(function(it){ return it.quantity > 0; });
       var item = inStock[0] || items[0] || null;
       var available = item ? item.quantity : 0;
       var status = inStock.length > 0 ? "good" : "critical";
       return { item: item, available: available, status: status };
     }
-    var item = currentProperty().inventory.find(function(i){ return i.id === ing.itemId; });
+    var needed = ing.quantity;
+    var sufficient = items.filter(function(it){ return it.quantity >= needed; });
+    var item = sufficient[0] || items.slice().sort(function(a,b){ return b.quantity - a.quantity; })[0] || null;
     var available = item ? item.quantity : 0;
-    var status = available <= 0 ? "critical" : (available < ing.quantity ? "warn" : "good");
+    var status = available <= 0 ? "critical" : (available < needed ? "warn" : "good");
     return { item: item, available: available, status: status };
   }
 
   function computeShoppingList(){
-    var totals = {};
+    var qtyGroups = {};
     var anyGroups = {};
     currentProperty().calendar.forEach(function(entry){
       var recipe = currentProperty().recipes.find(function(r){ return r.id === entry.recipeId; });
       if(!recipe) return;
       var multiplier = (entry.servings || 1) / (recipe.yield || 1);
       recipe.ingredients.forEach(function(ing){
+        var ids = ingredientItemIds(ing);
+        if(!ids.length) return;
+        var groupKey = ids.slice().sort().join("|");
         if(ing.any){
-          var ids = ingredientItemIds(ing);
-          var groupKey = ids.slice().sort().join("|");
-          if(groupKey) anyGroups[groupKey] = ids;
+          anyGroups[groupKey] = ids;
         } else {
-          totals[ing.itemId] = (totals[ing.itemId] || 0) + ing.quantity * multiplier;
+          if(!qtyGroups[groupKey]) qtyGroups[groupKey] = { ids: ids, needed: 0 };
+          qtyGroups[groupKey].needed += ing.quantity * multiplier;
         }
       });
     });
     var list = [];
-    Object.keys(totals).forEach(function(itemId){
-      var needed = totals[itemId];
-      var item = currentProperty().inventory.find(function(i){ return i.id === itemId; });
-      var available = item ? item.quantity : 0;
-      if(needed > available + 1e-9){
-        list.push({
-          name: item ? item.name : "(artículo eliminado)",
-          missing: needed - available,
-          isFraction: item ? item.isFraction : false,
-          unit: item ? item.unit : ""
-        });
-      }
+    Object.keys(qtyGroups).forEach(function(groupKey){
+      var g = qtyGroups[groupKey];
+      var items = g.ids.map(function(itemId){ return currentProperty().inventory.find(function(i){ return i.id === itemId; }); }).filter(Boolean);
+      var satisfied = items.some(function(it){ return it.quantity >= g.needed - 1e-9; });
+      if(satisfied) return;
+      var best = items.slice().sort(function(a,b){ return b.quantity - a.quantity; })[0];
+      var names = items.map(function(it){ return it.name; }).join(" o ");
+      list.push({
+        name: names || "(artículo eliminado)",
+        missing: g.needed - (best ? best.quantity : 0),
+        isFraction: best ? best.isFraction : false,
+        unit: best ? best.unit : ""
+      });
     });
     Object.keys(anyGroups).forEach(function(groupKey){
       var ids = anyGroups[groupKey];
@@ -956,43 +961,25 @@
     var draft = ui.recipeDraft;
     var invOptions = currentProperty().inventory.slice().sort(function(a,b){ return a.name.localeCompare(b.name,"es"); });
     var rows = draft.ingredients.map(function(ing, idx){
-      var anyToggle = '<label class="any-toggle" style="grid-column:1 / -1;display:flex;align-items:center;gap:6px;font-size:0.8rem;color:var(--ink-muted);">' +
-        '<input type="checkbox" class="ing-any-toggle" data-index="' + idx + '" id="ing-any-' + idx + '"' + (ing.any ? " checked" : "") + '> Solo que haya (no importa cuánto)' +
-      '</label>';
-      var removeBtn = '<button type="button" class="icon-btn" data-click="recipe-remove-row" data-index="' + idx + '" aria-label="Quitar" style="align-self:end;">✕</button>';
-
-      if(ing.any){
-        var itemIds = ing.itemIds || (ing.itemId ? [ing.itemId] : []);
-        var chips = itemIds.map(function(id){
-          var it = invOptions.find(function(o){ return o.id === id; });
-          return '<span class="alt-chip">' + esc(it ? it.name : "?") +
-            '<button type="button" class="alt-chip-remove" data-click="ing-alt-remove" data-index="' + idx + '" data-item-id="' + id + '" aria-label="Quitar">✕</button></span>';
-        }).join("");
-        return '' +
-          '<div class="ingredient-row ingredient-row-any">' +
-            '<div class="field combo-wrap" style="grid-column:1 / span 2;">' +
-              '<label>Alternativas (con que haya una, sirve)</label>' +
-              (chips ? '<div class="alt-chip-list">' + chips + '</div>' : '') +
-              '<input type="text" id="ing-item-search-' + idx + '" data-input="ing-search" data-index="' + idx + '" autocomplete="off" placeholder="Ej. pollo, jamón…">' +
-              '<div class="combo-list hidden" id="ing-combo-' + idx + '"></div>' +
-            '</div>' +
-            removeBtn +
-            anyToggle +
-          '</div>';
-      }
-
-      var selected = ing.itemId ? invOptions.find(function(it){ return it.id === ing.itemId; }) : null;
+      var itemIds = ing.itemIds || [];
+      var chips = itemIds.map(function(id){
+        var it = invOptions.find(function(o){ return o.id === id; });
+        return '<span class="alt-chip">' + esc(it ? it.name : "?") +
+          '<button type="button" class="alt-chip-remove" data-click="ing-alt-remove" data-index="' + idx + '" data-item-id="' + id + '" aria-label="Quitar">✕</button></span>';
+      }).join("");
       return '' +
         '<div class="ingredient-row">' +
           '<div class="field combo-wrap">' +
-            '<label>Ingrediente</label>' +
-            '<input type="text" id="ing-item-search-' + idx + '" data-input="ing-search" data-index="' + idx + '" autocomplete="off" placeholder="Escribe para buscar…" value="' + esc(selected ? selected.name : "") + '">' +
-            '<input type="hidden" id="ing-item-id-' + idx + '" value="' + (ing.itemId || "") + '">' +
+            '<label>Ingrediente' + (itemIds.length > 1 ? " (cualquiera sirve)" : "") + '</label>' +
+            (chips ? '<div class="alt-chip-list">' + chips + '</div>' : '') +
+            '<input type="text" id="ing-item-search-' + idx + '" data-input="ing-search" data-index="' + idx + '" autocomplete="off" placeholder="' + (itemIds.length ? "+ agregar alternativa…" : "Escribe para buscar…") + '">' +
             '<div class="combo-list hidden" id="ing-combo-' + idx + '"></div>' +
           '</div>' +
-          '<div class="field qty-field" id="ing-qty-field-' + idx + '"><label>Cantidad</label><input type="number" id="ing-qty-' + idx + '" min="0" step="0.01" value="' + (ing.quantity != null ? ing.quantity : "") + '"></div>' +
-          removeBtn +
-          anyToggle +
+          '<div class="field qty-field' + (ing.any ? " hidden" : "") + '" id="ing-qty-field-' + idx + '"><label>Cantidad</label><input type="number" id="ing-qty-' + idx + '" min="0" step="0.01" value="' + (ing.quantity != null ? ing.quantity : "") + '"></div>' +
+          '<button type="button" class="icon-btn" data-click="recipe-remove-row" data-index="' + idx + '" aria-label="Quitar" style="align-self:end;">✕</button>' +
+          '<label class="any-toggle" style="grid-column:1 / -1;display:flex;align-items:center;gap:6px;font-size:0.8rem;color:var(--ink-muted);">' +
+            '<input type="checkbox" class="ing-any-toggle" data-index="' + idx + '" id="ing-any-' + idx + '"' + (ing.any ? " checked" : "") + '> Solo que haya (no importa cuánto)' +
+          '</label>' +
         '</div>';
     }).join("");
 
@@ -1003,7 +990,7 @@
         '<div class="field span-2" style="margin-bottom:12px;"><label>Nombre</label><input type="text" id="recipe-form-name" required value="' + esc(draft.name) + '" placeholder="Ej. Hamburguesas"></div>' +
         '<div class="field" style="max-width:180px;margin-bottom:12px;"><label>Rinde (raciones)</label><input type="number" id="recipe-form-yield" min="1" step="1" value="' + (draft.yield || 1) + '"></div>' +
         '<label style="font-size:0.78rem;color:var(--ink-muted);font-weight:600;">Ingredientes</label>' +
-        '<p class="muted-line" style="margin:2px 0 6px;">Cantidad = lo que usa la receta completa (para las raciones de arriba). Para algo compartido como salsas, marca "Solo que haya" en vez de poner cantidad.</p>' +
+        '<p class="muted-line" style="margin:2px 0 6px;">Cantidad = lo que usa la receta completa (para las raciones de arriba). Puedes agregar varias alternativas a un mismo ingrediente (ej. carne o salmón) y con que una tenga suficiente, sirve. Para algo compartido como salsas, marca "Solo que haya" en vez de poner cantidad.</p>' +
         '<div style="margin-top:6px;">' + (rows || '<p class="muted-line">Agrega al menos un ingrediente.</p>') + '</div>' +
         '<button type="button" class="btn btn-ghost" data-click="recipe-add-row" style="margin-bottom:14px;">+ Agregar ingrediente</button>' +
         '<div class="field span-2" style="margin-bottom:12px;"><label>Notas (opcional)</label><textarea id="recipe-form-notes" placeholder="Instrucciones o notas…">' + esc(draft.notes) + '</textarea></div>' +
@@ -1029,8 +1016,13 @@
           ("hay " + trimNum(av.available) + (av.item ? " " + esc(av.item.unit||"") : "") + (names.length > 1 && av.item ? " de " + esc(av.item.name) : ""));
         label = namesLabel + " · " + statusLabel;
       } else {
-        label = (av.item ? esc(av.item.name) : "(eliminado)") + " · " +
-          trimNum(ing.quantity) + (av.item ? " " + esc(av.item.unit||"") : "");
+        var qNames = ingredientItemIds(ing).map(function(id){
+          var it = currentProperty().inventory.find(function(i){ return i.id === id; });
+          return it ? it.name : null;
+        }).filter(Boolean);
+        var qNamesLabel = qNames.length ? esc(qNames.join(" o ")) : "(eliminado)";
+        label = qNamesLabel + " · " + trimNum(ing.quantity) + (av.item ? " " + esc(av.item.unit||"") : "") +
+          (qNames.length > 1 ? (" (tienes " + trimNum(av.available) + (av.item ? " de " + esc(av.item.name) : "") + ")") : "");
       }
       return '<span class="ing-chip ' + av.status + '">' + label + '</span>';
     }).join("");
@@ -1197,7 +1189,7 @@
       var worst = "good";
       var multiplier = (entry.servings || 1) / (recipe.yield || 1);
       recipe.ingredients.forEach(function(ing){
-        var checkIng = ing.any ? ing : { itemId: ing.itemId, quantity: ing.quantity * multiplier };
+        var checkIng = ing.any ? ing : { itemIds: ingredientItemIds(ing), quantity: ing.quantity * multiplier };
         var av = ingredientAvailability(checkIng);
         if(av.status === "critical") worst = "critical";
         else if(av.status === "warn" && worst !== "critical") worst = "warn";
@@ -1269,17 +1261,13 @@
     var list = document.getElementById("ing-combo-" + idx);
     if(!list) return;
     var ing = ui.recipeDraft.ingredients[idx];
-    var isAny = ing && ing.any;
-    var matches = ingredientMatches(query);
-    if(isAny && ing.itemIds){
-      matches = matches.filter(function(it){ return ing.itemIds.indexOf(it.id) === -1; });
-    }
+    var existingIds = (ing && ing.itemIds) || [];
+    var matches = ingredientMatches(query).filter(function(it){ return existingIds.indexOf(it.id) === -1; });
     if(matches.length === 0){
       list.innerHTML = '<div class="combo-empty">' + (query.trim() ? "Sin resultados para “" + esc(query.trim()) + "”" : "No hay artículos en el inventario") + '</div>';
     } else {
-      var action = isAny ? "ing-alt-add" : "recipe-pick-ingredient";
       list.innerHTML = matches.map(function(it){
-        return '<button type="button" class="combo-item" data-click="' + action + '" data-index="' + idx + '" data-item-id="' + it.id + '">' + esc(it.name) + '</button>';
+        return '<button type="button" class="combo-item" data-click="ing-alt-add" data-index="' + idx + '" data-item-id="' + it.id + '">' + esc(it.name) + '</button>';
       }).join("");
     }
     list.classList.remove("hidden");
@@ -1405,7 +1393,7 @@
 
       case "open-add-recipe":
         ui.recipeFormOpen = true; ui.recipeEditingId = null;
-        ui.recipeDraft = { name:"", notes:"", yield:1, ingredients:[{itemId:"", quantity:1, any:false}] };
+        ui.recipeDraft = { name:"", notes:"", yield:1, ingredients:[{itemIds:[], quantity:1, any:false}] };
         render();
         break;
       case "edit-recipe":
@@ -1419,8 +1407,7 @@
             yield: recipe.yield || 1,
             ingredients: recipe.ingredients.map(function(ing){
               return {
-                itemId: ing.itemId || (ing.itemIds ? ing.itemIds[0] : ""),
-                itemIds: ing.itemIds ? ing.itemIds.slice() : undefined,
+                itemIds: ing.itemIds ? ing.itemIds.slice() : (ing.itemId ? [ing.itemId] : []),
                 quantity: ing.quantity != null ? ing.quantity : 1,
                 any: !!ing.any
               };
@@ -1435,26 +1422,14 @@
         break;
       case "recipe-add-row":
         harvestRecipeDraft();
-        ui.recipeDraft.ingredients.push({itemId:"", quantity:1, any:false});
+        ui.recipeDraft.ingredients.push({itemIds:[], quantity:1, any:false});
         render();
         break;
       case "recipe-remove-row":
         harvestRecipeDraft();
         ui.recipeDraft.ingredients.splice(parseInt(t.getAttribute("data-index"),10), 1);
-        if(ui.recipeDraft.ingredients.length === 0) ui.recipeDraft.ingredients.push({itemId:"", quantity:1, any:false});
+        if(ui.recipeDraft.ingredients.length === 0) ui.recipeDraft.ingredients.push({itemIds:[], quantity:1, any:false});
         render();
-        break;
-      case "recipe-pick-ingredient":
-        (function(){
-          var idx = t.getAttribute("data-index");
-          var itemId = t.getAttribute("data-item-id");
-          var item = currentProperty().inventory.find(function(i){ return i.id === itemId; });
-          var hidden = document.getElementById("ing-item-id-" + idx);
-          var search = document.getElementById("ing-item-search-" + idx);
-          if(hidden) hidden.value = itemId;
-          if(search) search.value = item ? item.name : "";
-          hideCombo(idx);
-        })();
         break;
       case "ing-alt-add":
         (function(){
@@ -1568,15 +1543,11 @@
       document.getElementById("item-form-openpct-field").style.display = isFraction ? "" : "none";
     }
     if(e.target.classList.contains("ing-any-toggle")){
-      harvestRecipeDraft();
-      var qIdx = parseInt(e.target.getAttribute("data-index"), 10);
+      var qIdx = e.target.getAttribute("data-index");
       var ing = ui.recipeDraft.ingredients[qIdx];
-      if(ing.any){
-        if(!ing.itemIds || ing.itemIds.length === 0) ing.itemIds = ing.itemId ? [ing.itemId] : [];
-      } else if(!ing.itemId && ing.itemIds && ing.itemIds.length){
-        ing.itemId = ing.itemIds[0];
-      }
-      render();
+      if(ing) ing.any = e.target.checked;
+      var qField = document.getElementById("ing-qty-field-" + qIdx);
+      if(qField) qField.classList.toggle("hidden", e.target.checked);
     }
     if(e.target.name === "cal-form-mode"){
       var isLibre = e.target.value === "libre";
@@ -1602,8 +1573,6 @@
     } else if(action === "ing-search"){
       var idx = t.getAttribute("data-index");
       updateIngredientCombo(idx, t.value);
-      var hidden = document.getElementById("ing-item-id-" + idx);
-      if(hidden) hidden.value = "";
     }
   });
 
@@ -1635,12 +1604,8 @@
     ui.recipeDraft.ingredients.forEach(function(ing, idx){
       var any = document.getElementById("ing-any-" + idx);
       if(any) ing.any = any.checked;
-      if(!ing.any){
-        var hidden = document.getElementById("ing-item-id-" + idx);
-        var qty = document.getElementById("ing-qty-" + idx);
-        if(hidden) ing.itemId = hidden.value;
-        if(qty) ing.quantity = parseFloat(qty.value) || 0;
-      }
+      var qty = document.getElementById("ing-qty-" + idx);
+      if(qty) ing.quantity = parseFloat(qty.value) || 0;
     });
   }
 
@@ -1687,18 +1652,14 @@
     var draft = ui.recipeDraft;
     var name = (draft.name || "").trim();
     var ingredients = draft.ingredients.filter(function(i){
-      if(i.any) return (i.itemIds && i.itemIds.length) || i.itemId;
-      return i.itemId && i.quantity > 0;
+      if(!i.itemIds || i.itemIds.length === 0) return false;
+      return i.any || i.quantity > 0;
     });
     if(!name || ingredients.length === 0) return;
     var mode = form.getAttribute("data-mode");
     var recipeYield = Math.max(1, parseInt(draft.yield, 10) || 1);
     var mappedIngredients = ingredients.map(function(i){
-      if(i.any){
-        var ids = (i.itemIds && i.itemIds.length) ? i.itemIds : (i.itemId ? [i.itemId] : []);
-        return ids.length > 1 ? {itemIds:ids, any:true} : {itemId:ids[0], any:true};
-      }
-      return {itemId:i.itemId, quantity:i.quantity};
+      return i.any ? {itemIds:i.itemIds.slice(), any:true} : {itemIds:i.itemIds.slice(), quantity:i.quantity};
     });
     if(mode === "edit"){
       var recipeId = form.getAttribute("data-recipe-id");
