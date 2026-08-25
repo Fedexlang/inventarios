@@ -361,6 +361,14 @@
   }
   .cal-meal-slot.filled{color:var(--accent-deep);font-weight:600;}
   .field.hidden{display:none;}
+
+  .alt-chip-list{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0;}
+  .alt-chip{
+    display:inline-flex;align-items:center;gap:4px;background:var(--surface-2);
+    border:1px solid var(--border);border-radius:999px;padding:4px 6px 4px 10px;font-size:0.8rem;
+  }
+  .alt-chip-remove{background:none;border:none;color:var(--ink-muted);cursor:pointer;font-size:0.85rem;line-height:1;padding:2px;}
+  .alt-chip-remove:hover{color:var(--critical);}
 </style>
 
 </head>
@@ -637,28 +645,39 @@
   }
   var STATUS_LABEL = { critical:"Agotado", warn:"Bajo", good:"OK" };
 
+  function ingredientItemIds(ing){
+    return ing.itemIds || (ing.itemId ? [ing.itemId] : []);
+  }
+
   function ingredientAvailability(ing){
+    if(ing.any){
+      var items = ingredientItemIds(ing).map(function(id){
+        return currentProperty().inventory.find(function(i){ return i.id === id; });
+      }).filter(Boolean);
+      var inStock = items.filter(function(it){ return it.quantity > 0; });
+      var item = inStock[0] || items[0] || null;
+      var available = item ? item.quantity : 0;
+      var status = inStock.length > 0 ? "good" : "critical";
+      return { item: item, available: available, status: status };
+    }
     var item = currentProperty().inventory.find(function(i){ return i.id === ing.itemId; });
     var available = item ? item.quantity : 0;
-    var status;
-    if(ing.any){
-      status = available <= 0 ? "critical" : "good";
-    } else {
-      status = available <= 0 ? "critical" : (available < ing.quantity ? "warn" : "good");
-    }
+    var status = available <= 0 ? "critical" : (available < ing.quantity ? "warn" : "good");
     return { item: item, available: available, status: status };
   }
 
   function computeShoppingList(){
     var totals = {};
-    var anyIds = {};
+    var anyGroups = {};
     currentProperty().calendar.forEach(function(entry){
       var recipe = currentProperty().recipes.find(function(r){ return r.id === entry.recipeId; });
       if(!recipe) return;
       var multiplier = (entry.servings || 1) / (recipe.yield || 1);
       recipe.ingredients.forEach(function(ing){
         if(ing.any){
-          anyIds[ing.itemId] = true;
+          var ids = ingredientItemIds(ing);
+          var groupKey = ids.slice().sort().join("|");
+          if(groupKey) anyGroups[groupKey] = ids;
         } else {
           totals[ing.itemId] = (totals[ing.itemId] || 0) + ing.quantity * multiplier;
         }
@@ -678,12 +697,18 @@
         });
       }
     });
-    Object.keys(anyIds).forEach(function(itemId){
-      if(totals.hasOwnProperty(itemId)) return;
-      var item = currentProperty().inventory.find(function(i){ return i.id === itemId; });
-      var available = item ? item.quantity : 0;
-      if(available <= 0){
-        list.push({ name: item ? item.name : "(artículo eliminado)", outOfStock: true });
+    Object.keys(anyGroups).forEach(function(groupKey){
+      var ids = anyGroups[groupKey];
+      var satisfied = ids.some(function(itemId){
+        var item = currentProperty().inventory.find(function(i){ return i.id === itemId; });
+        return item && item.quantity > 0;
+      });
+      if(!satisfied){
+        var names = ids.map(function(itemId){
+          var item = currentProperty().inventory.find(function(i){ return i.id === itemId; });
+          return item ? item.name : null;
+        }).filter(Boolean);
+        list.push({ name: names.join(" o ") || "(artículo eliminado)", outOfStock: true });
       }
     });
     list.sort(function(a,b){ return a.name.localeCompare(b.name, "es"); });
@@ -931,6 +956,31 @@
     var draft = ui.recipeDraft;
     var invOptions = currentProperty().inventory.slice().sort(function(a,b){ return a.name.localeCompare(b.name,"es"); });
     var rows = draft.ingredients.map(function(ing, idx){
+      var anyToggle = '<label class="any-toggle" style="grid-column:1 / -1;display:flex;align-items:center;gap:6px;font-size:0.8rem;color:var(--ink-muted);">' +
+        '<input type="checkbox" class="ing-any-toggle" data-index="' + idx + '" id="ing-any-' + idx + '"' + (ing.any ? " checked" : "") + '> Solo que haya (no importa cuánto)' +
+      '</label>';
+      var removeBtn = '<button type="button" class="icon-btn" data-click="recipe-remove-row" data-index="' + idx + '" aria-label="Quitar" style="align-self:end;">✕</button>';
+
+      if(ing.any){
+        var itemIds = ing.itemIds || (ing.itemId ? [ing.itemId] : []);
+        var chips = itemIds.map(function(id){
+          var it = invOptions.find(function(o){ return o.id === id; });
+          return '<span class="alt-chip">' + esc(it ? it.name : "?") +
+            '<button type="button" class="alt-chip-remove" data-click="ing-alt-remove" data-index="' + idx + '" data-item-id="' + id + '" aria-label="Quitar">✕</button></span>';
+        }).join("");
+        return '' +
+          '<div class="ingredient-row ingredient-row-any">' +
+            '<div class="field combo-wrap" style="grid-column:1 / span 2;">' +
+              '<label>Alternativas (con que haya una, sirve)</label>' +
+              (chips ? '<div class="alt-chip-list">' + chips + '</div>' : '') +
+              '<input type="text" id="ing-item-search-' + idx + '" data-input="ing-search" data-index="' + idx + '" autocomplete="off" placeholder="Ej. pollo, jamón…">' +
+              '<div class="combo-list hidden" id="ing-combo-' + idx + '"></div>' +
+            '</div>' +
+            removeBtn +
+            anyToggle +
+          '</div>';
+      }
+
       var selected = ing.itemId ? invOptions.find(function(it){ return it.id === ing.itemId; }) : null;
       return '' +
         '<div class="ingredient-row">' +
@@ -940,11 +990,9 @@
             '<input type="hidden" id="ing-item-id-' + idx + '" value="' + (ing.itemId || "") + '">' +
             '<div class="combo-list hidden" id="ing-combo-' + idx + '"></div>' +
           '</div>' +
-          '<div class="field qty-field" id="ing-qty-field-' + idx + '" style="' + (ing.any ? "display:none;" : "") + '"><label>Cantidad</label><input type="number" id="ing-qty-' + idx + '" min="0" step="0.01" value="' + (ing.quantity != null ? ing.quantity : "") + '"></div>' +
-          '<button type="button" class="icon-btn" data-click="recipe-remove-row" data-index="' + idx + '" aria-label="Quitar" style="align-self:end;">✕</button>' +
-          '<label class="any-toggle" style="grid-column:1 / -1;display:flex;align-items:center;gap:6px;font-size:0.8rem;color:var(--ink-muted);">' +
-            '<input type="checkbox" class="ing-any-toggle" data-index="' + idx + '" id="ing-any-' + idx + '"' + (ing.any ? " checked" : "") + '> Solo que haya (no importa cuánto)' +
-          '</label>' +
+          '<div class="field qty-field" id="ing-qty-field-' + idx + '"><label>Cantidad</label><input type="number" id="ing-qty-' + idx + '" min="0" step="0.01" value="' + (ing.quantity != null ? ing.quantity : "") + '"></div>' +
+          removeBtn +
+          anyToggle +
         '</div>';
     }).join("");
 
@@ -972,7 +1020,14 @@
       var av = ingredientAvailability(ing);
       var label;
       if(ing.any){
-        label = (av.item ? esc(av.item.name) : "(eliminado)") + " · hay " + trimNum(av.available) + (av.item ? " " + esc(av.item.unit||"") : "");
+        var names = ingredientItemIds(ing).map(function(id){
+          var it = currentProperty().inventory.find(function(i){ return i.id === id; });
+          return it ? it.name : null;
+        }).filter(Boolean);
+        var namesLabel = names.length ? esc(names.join(" o ")) : "(eliminado)";
+        var statusLabel = av.status === "critical" ? "agotado" :
+          ("hay " + trimNum(av.available) + (av.item ? " " + esc(av.item.unit||"") : "") + (names.length > 1 && av.item ? " de " + esc(av.item.name) : ""));
+        label = namesLabel + " · " + statusLabel;
       } else {
         label = (av.item ? esc(av.item.name) : "(eliminado)") + " · " +
           trimNum(ing.quantity) + (av.item ? " " + esc(av.item.unit||"") : "");
@@ -1213,12 +1268,18 @@
   function updateIngredientCombo(idx, query){
     var list = document.getElementById("ing-combo-" + idx);
     if(!list) return;
+    var ing = ui.recipeDraft.ingredients[idx];
+    var isAny = ing && ing.any;
     var matches = ingredientMatches(query);
+    if(isAny && ing.itemIds){
+      matches = matches.filter(function(it){ return ing.itemIds.indexOf(it.id) === -1; });
+    }
     if(matches.length === 0){
       list.innerHTML = '<div class="combo-empty">' + (query.trim() ? "Sin resultados para “" + esc(query.trim()) + "”" : "No hay artículos en el inventario") + '</div>';
     } else {
+      var action = isAny ? "ing-alt-add" : "recipe-pick-ingredient";
       list.innerHTML = matches.map(function(it){
-        return '<button type="button" class="combo-item" data-click="recipe-pick-ingredient" data-index="' + idx + '" data-item-id="' + it.id + '">' + esc(it.name) + '</button>';
+        return '<button type="button" class="combo-item" data-click="' + action + '" data-index="' + idx + '" data-item-id="' + it.id + '">' + esc(it.name) + '</button>';
       }).join("");
     }
     list.classList.remove("hidden");
@@ -1356,7 +1417,14 @@
             name: recipe.name,
             notes: recipe.notes || "",
             yield: recipe.yield || 1,
-            ingredients: recipe.ingredients.map(function(ing){ return { itemId: ing.itemId, quantity: ing.quantity != null ? ing.quantity : 1, any: !!ing.any }; })
+            ingredients: recipe.ingredients.map(function(ing){
+              return {
+                itemId: ing.itemId || (ing.itemIds ? ing.itemIds[0] : ""),
+                itemIds: ing.itemIds ? ing.itemIds.slice() : undefined,
+                quantity: ing.quantity != null ? ing.quantity : 1,
+                any: !!ing.any
+              };
+            })
           };
         })();
         render();
@@ -1387,6 +1455,28 @@
           if(search) search.value = item ? item.name : "";
           hideCombo(idx);
         })();
+        break;
+      case "ing-alt-add":
+        (function(){
+          var idx = parseInt(t.getAttribute("data-index"), 10);
+          var itemId = t.getAttribute("data-item-id");
+          harvestRecipeDraft();
+          var ing = ui.recipeDraft.ingredients[idx];
+          if(!ing.itemIds) ing.itemIds = [];
+          if(ing.itemIds.indexOf(itemId) === -1) ing.itemIds.push(itemId);
+          hideCombo(idx);
+        })();
+        render();
+        break;
+      case "ing-alt-remove":
+        (function(){
+          var idx = parseInt(t.getAttribute("data-index"), 10);
+          var itemId = t.getAttribute("data-item-id");
+          harvestRecipeDraft();
+          var ing = ui.recipeDraft.ingredients[idx];
+          if(ing.itemIds) ing.itemIds = ing.itemIds.filter(function(x){ return x !== itemId; });
+        })();
+        render();
         break;
       case "delete-recipe-request":
         armDelete("recipe", id);
@@ -1478,9 +1568,15 @@
       document.getElementById("item-form-openpct-field").style.display = isFraction ? "" : "none";
     }
     if(e.target.classList.contains("ing-any-toggle")){
-      var qIdx = e.target.getAttribute("data-index");
-      var qField = document.getElementById("ing-qty-field-" + qIdx);
-      if(qField) qField.style.display = e.target.checked ? "none" : "";
+      harvestRecipeDraft();
+      var qIdx = parseInt(e.target.getAttribute("data-index"), 10);
+      var ing = ui.recipeDraft.ingredients[qIdx];
+      if(ing.any){
+        if(!ing.itemIds || ing.itemIds.length === 0) ing.itemIds = ing.itemId ? [ing.itemId] : [];
+      } else if(!ing.itemId && ing.itemIds && ing.itemIds.length){
+        ing.itemId = ing.itemIds[0];
+      }
+      render();
     }
     if(e.target.name === "cal-form-mode"){
       var isLibre = e.target.value === "libre";
@@ -1537,12 +1633,14 @@
     if(notesEl) ui.recipeDraft.notes = notesEl.value;
     if(yieldEl) ui.recipeDraft.yield = parseInt(yieldEl.value, 10) || 1;
     ui.recipeDraft.ingredients.forEach(function(ing, idx){
-      var hidden = document.getElementById("ing-item-id-" + idx);
-      var qty = document.getElementById("ing-qty-" + idx);
       var any = document.getElementById("ing-any-" + idx);
-      if(hidden) ing.itemId = hidden.value;
-      if(qty) ing.quantity = parseFloat(qty.value) || 0;
       if(any) ing.any = any.checked;
+      if(!ing.any){
+        var hidden = document.getElementById("ing-item-id-" + idx);
+        var qty = document.getElementById("ing-qty-" + idx);
+        if(hidden) ing.itemId = hidden.value;
+        if(qty) ing.quantity = parseFloat(qty.value) || 0;
+      }
     });
   }
 
@@ -1588,12 +1686,19 @@
     harvestRecipeDraft();
     var draft = ui.recipeDraft;
     var name = (draft.name || "").trim();
-    var ingredients = draft.ingredients.filter(function(i){ return i.itemId && (i.any || i.quantity > 0); });
+    var ingredients = draft.ingredients.filter(function(i){
+      if(i.any) return (i.itemIds && i.itemIds.length) || i.itemId;
+      return i.itemId && i.quantity > 0;
+    });
     if(!name || ingredients.length === 0) return;
     var mode = form.getAttribute("data-mode");
     var recipeYield = Math.max(1, parseInt(draft.yield, 10) || 1);
     var mappedIngredients = ingredients.map(function(i){
-      return i.any ? {itemId:i.itemId, any:true} : {itemId:i.itemId, quantity:i.quantity};
+      if(i.any){
+        var ids = (i.itemIds && i.itemIds.length) ? i.itemIds : (i.itemId ? [i.itemId] : []);
+        return ids.length > 1 ? {itemIds:ids, any:true} : {itemId:ids[0], any:true};
+      }
+      return {itemId:i.itemId, quantity:i.quantity};
     });
     if(mode === "edit"){
       var recipeId = form.getAttribute("data-recipe-id");
